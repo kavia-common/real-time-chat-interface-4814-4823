@@ -16,34 +16,17 @@ const DEFAULT_TITLE = 'Support Chat';
 /**
  * A non-intrusive, dismissible banner that shows WebSocket setup guidance.
  * Uses Ocean Professional CSS variables for consistent theming.
+ * Note: No hooks inside this component make network or conditional calls that break rules of hooks.
  */
-function WsHelpBanner({ visible, env }) {
-  // Hook must be called unconditionally at top-level to satisfy react-hooks rules
-  const [dismissed, setDismissed] = useState(() => {
-    try {
-      return sessionStorage.getItem("ws-help-dismissed") === "1";
-    } catch {
-      return false;
-    }
-  });
-
-  if (!visible || dismissed) return null;
-
-  const onDismiss = () => {
-    setDismissed(true);
-    try {
-      sessionStorage.setItem("ws-help-dismissed", "1");
-    } catch {
-      // ignore storage issues
-    }
-  };
+function WsHelpBanner({ visible, env, onDismiss }) {
+  if (!visible) return null;
 
   const styles = {
     wrap: {
       display: 'flex',
       alignItems: 'flex-start',
       gap: 12,
-      margin: '10px 12px 0 12px',
+      margin: '10px 12px 8px 12px', // add bottom margin so it doesn't crowd message list
       padding: '12px 14px',
       background: 'var(--surface-muted, #f3f4f6)',
       border: '1px solid var(--border-color, #e5e7eb)',
@@ -69,6 +52,7 @@ function WsHelpBanner({ visible, env }) {
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: 8,
+      flexWrap: 'wrap',
     },
     title: {
       margin: 0,
@@ -88,6 +72,7 @@ function WsHelpBanner({ visible, env }) {
       cursor: 'pointer',
       boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(0,0,0,0.06))',
       transition: 'opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease',
+      flexShrink: 0,
     },
     text: {
       margin: '6px 0 0 0',
@@ -124,6 +109,7 @@ function WsHelpBanner({ visible, env }) {
       cursor: 'pointer',
       boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(0,0,0,0.06))',
       transition: 'opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease',
+      flexShrink: 0,
     },
     small: {
       fontSize: 11,
@@ -156,7 +142,13 @@ function WsHelpBanner({ visible, env }) {
       <div style={styles.content}>
         <div style={styles.titleRow}>
           <h3 style={styles.title}>WebSocket not connected</h3>
-          <button type="button" style={styles.dismissBtn} onClick={onDismiss} title="Dismiss for this session" aria-label="Dismiss WebSocket help for this session">
+          <button
+            type="button"
+            style={styles.dismissBtn}
+            onClick={onDismiss}
+            title="Dismiss for this session"
+            aria-label="Dismiss WebSocket help for this session"
+          >
             Dismiss
           </button>
         </div>
@@ -188,6 +180,15 @@ function WsHelpBanner({ visible, env }) {
 function App() {
   /** Root application component composing header, message list, and input with WebSocket integration. */
   const [theme, setTheme] = useState('light');
+
+  // Persist dismissal per session without violating rules of hooks
+  const [wsBannerDismissed, setWsBannerDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem('ws-help-dismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
 
   // a naive current user id for demo; in real apps derive from auth/user profile
   const [currentUser] = useState(() => ({
@@ -230,8 +231,7 @@ function App() {
     // url resolved inside hook via env utils
     autoConnect: true,
     shouldReconnect: true,
-    onMessage: ({ data }) => {
-      // Additional handler over lastMessage state if needed; we primarily use lastMessage effect below
+    onMessage: () => {
       // No-op here; logic centralized in useEffect listening on lastMessage
     },
   });
@@ -378,11 +378,8 @@ function App() {
 
       const queuedOrSent = send(payload);
 
-      // If not connected, queuedOrSent may be false but the hook queues until open.
-      // We keep the optimistic message. If the socket eventually fails with no ack,
-      // user still sees their message; future UX improvements could add retry/error state.
       if (!queuedOrSent && !connecting && !connected) {
-        // Optionally mark as "queued" visually by leaving pending=true
+        // leave pending state to indicate queued
       }
     },
     [currentUser, send, connected, connecting]
@@ -415,17 +412,33 @@ function App() {
       borderLeft: '1px solid var(--border-color, #e5e7eb)',
       borderRight: '1px solid var(--border-color, #e5e7eb)',
       background: 'var(--surface, #ffffff)',
-      paddingBottom: 4, // tiny breathing room so banner never feels cramped near input
+      paddingBottom: 8, // ensure breathing room so banner and input never collide on small screens
     },
     listWrap: {
       flex: 1,
       minHeight: 0,
+      display: 'flex',
+      flexDirection: 'column',
     },
   };
 
   const envSummary = getEnvSummary();
-  // Show when disconnected, or when URL is derived (not from explicit env) to guide configuration.
-  const showWsBanner = (!connected && !connecting) || !envSummary.wsFromExplicit;
+
+  // Show banner when:
+  // - Not connected and not currently connecting (to guide setup), OR
+  // - WS URL is not from explicit env (to nudge to set REACT_APP_WS_URL)
+  // Also respect session dismissal.
+  const bannerShouldShow =
+    ((!connected && !connecting) || !envSummary.wsFromExplicit) && !wsBannerDismissed;
+
+  const handleDismissBanner = useCallback(() => {
+    setWsBannerDismissed(true);
+    try {
+      sessionStorage.setItem('ws-help-dismissed', '1');
+    } catch {
+      // ignore storage issues
+    }
+  }, []);
 
   return (
     <div className="App" style={styles.app}>
@@ -440,7 +453,11 @@ function App() {
           avatarText="AI"
         />
 
-        <WsHelpBanner visible={showWsBanner} env={{ ...envSummary, wsResolved: (url || '') }} />
+        <WsHelpBanner
+          visible={bannerShouldShow}
+          env={{ ...envSummary, wsResolved: url || '' }}
+          onDismiss={handleDismissBanner}
+        />
 
         <div style={styles.listWrap}>
           <MessageList messages={messages} currentUserId={currentUser.id} />
