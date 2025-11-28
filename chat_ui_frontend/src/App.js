@@ -4,7 +4,7 @@ import ChatHeader from './components/ChatHeader';
 import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
 import { useWebSocket } from './hooks/useWebSocket';
-import { getEnvSummary } from './utils/env';
+import { getEnvSummary, getApiBase } from './utils/env';
 
 // Shape of server messages assumed for example:
 // - Inbound chat message: { type: 'message', id: '...', sender: 'server'|'me'|<id>, content: '...', timestamp: number }
@@ -12,6 +12,64 @@ import { getEnvSummary } from './utils/env';
 // - Optional system events: { type: 'system', content: '...', timestamp: number }
 
 const DEFAULT_TITLE = 'Support Chat';
+
+/**
+ * Lightweight recent-history fetcher
+ * Attempts GET on `${apiBase}/messages` then falls back to `${apiBase}/api/messages`.
+ * Maps unknown schema to {id,sender,content,timestamp,name,avatarText}.
+ * Returns an array or [] on any error.
+ */
+async function fetchRecentMessagesSafe() {
+  const apiBase = getApiBase();
+  if (!apiBase) return [];
+  const candidates = [`${apiBase}/messages`, `${apiBase}/api/messages`];
+
+  // Helper: normalize one item
+  const toMessage = (item, index) => {
+    if (!item || typeof item !== 'object') {
+      return {
+        id: `hist-${Date.now()}-${index}`,
+        sender: 'other',
+        content: String(item ?? ''),
+        timestamp: Date.now(),
+        name: 'Assistant',
+        avatarText: 'AI',
+      };
+    }
+    const id = item.id ?? item._id ?? item.uuid ?? `hist-${Date.now()}-${index}`;
+    const content = item.content ?? item.message ?? item.text ?? '';
+    const sender = item.sender ?? item.role ?? (item.user === 'me' ? 'me' : 'other') ?? 'other';
+    const timestamp = item.timestamp ?? item.createdAt ?? item.time ?? Date.now();
+    const name = item.name ?? (sender === 'me' ? 'You' : 'Assistant');
+    const avatarText = item.avatarText ?? (sender === 'me' ? 'ME' : 'AI');
+    return { id, sender, content, timestamp, name, avatarText };
+  };
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { method: 'GET', credentials: 'include' });
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => null);
+      if (!data) continue;
+
+      // Accept arrays, or {messages: [...]}, or {data: [...]}
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.messages)
+        ? data.messages
+        : Array.isArray(data?.data)
+        ? data.data
+        : [];
+
+      if (!Array.isArray(list) || list.length === 0) return [];
+      return list.map(toMessage);
+    } catch {
+      // try next candidate
+      continue;
+    }
+  }
+  return [];
+}
 
 /**
  * A non-intrusive, dismissible banner that shows WebSocket setup guidance.
@@ -199,6 +257,8 @@ function App() {
 
   // message model internal: { id, clientId?, sender, content, timestamp, name?, avatarText?, pending?:boolean, error?:string }
   const [messages, setMessages] = useState([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyError, setHistoryError] = useState(null);
 
   // Map of clientId -> index in messages for quick optimistic ack reconciliation
   const pendingIndexRef = useRef(new Map());
@@ -224,6 +284,48 @@ function App() {
         },
       ];
     });
+  }, []);
+
+  // Optional recent history fetch: non-blocking, safe mapping, respects absence of API.
+  useEffect(() => {
+    let cancelled = false;
+
+    const apiBase = getApiBase();
+    if (!apiBase) {
+      setHistoryLoaded(true);
+      return;
+    }
+
+    (async () => {
+      try {
+        const history = await fetchRecentMessagesSafe();
+        if (cancelled) return;
+        if (Array.isArray(history) && history.length > 0) {
+          setMessages((prev) => {
+            // If previous is only the welcome message, replace it with history.
+            if (prev.length === 1 && prev[0]?.id === 'welcome-1') {
+              return history;
+            }
+            // Otherwise, merge without duplicating by id.
+            const byId = new Set(prev.map((m) => m.id));
+            const merged = [...prev];
+            for (const h of history) {
+              if (!byId.has(h.id)) merged.push(h);
+            }
+            return merged;
+          });
+        }
+        setHistoryError(null);
+      } catch (e) {
+        setHistoryError('Could not load recent messages.');
+      } finally {
+        if (!cancelled) setHistoryLoaded(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Setup WebSocket
@@ -460,6 +562,43 @@ function App() {
         />
 
         <div style={styles.listWrap}>
+          {/* Non-blocking status note for history load */}
+          {!historyLoaded && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                margin: '10px 12px 0 12px',
+                padding: '8px 12px',
+                fontSize: 12,
+                color: 'var(--text-secondary, #6b7280)',
+                background: 'var(--surface-muted, #f3f4f6)',
+                border: '1px solid var(--border-color, #e5e7eb)',
+                borderRadius: 8,
+                boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(17,24,39,0.06))',
+              }}
+            >
+              Loading recent messages…
+            </div>
+          )}
+          {historyLoaded && historyError && (
+            <div
+              role="note"
+              aria-live="polite"
+              style={{
+                margin: '10px 12px 0 12px',
+                padding: '8px 12px',
+                fontSize: 12,
+                color: 'var(--text-secondary, #6b7280)',
+                background: 'var(--surface-muted, #f3f4f6)',
+                border: '1px solid var(--border-color, #e5e7eb)',
+                borderRadius: 8,
+                boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(17,24,39,0.06))',
+              }}
+            >
+              Recent messages unavailable. You can still chat in real time.
+            </div>
+          )}
           <MessageList messages={messages} currentUserId={currentUser.id} />
         </div>
 
