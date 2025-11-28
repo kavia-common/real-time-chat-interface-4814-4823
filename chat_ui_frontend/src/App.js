@@ -13,6 +13,131 @@ import { getEnvSummary } from './utils/env';
 
 const DEFAULT_TITLE = 'Support Chat';
 
+// A small inline banner to guide users when WebSocket is not connected/unresolved.
+function WsHelpBanner({ visible, env }) {
+  if (!visible) return null;
+
+  const styles = {
+    wrap: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 12,
+      margin: 12,
+      padding: '12px 14px',
+      background: 'var(--surface-muted, #f3f4f6)',
+      border: '1px solid var(--border-color, #e5e7eb)',
+      borderRadius: 'var(--radius-md, 10px)',
+      boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(17,24,39,0.06))',
+      color: 'var(--text, #111827)',
+    },
+    bullet: {
+      width: 10,
+      height: 10,
+      marginTop: 5,
+      borderRadius: '50%',
+      backgroundColor: 'var(--status-disconnected, #EF4444)',
+      boxShadow: '0 0 0 2px rgba(239,68,68,0.08)',
+      flexShrink: 0,
+    },
+    content: {
+      flex: 1,
+      minWidth: 0,
+    },
+    title: {
+      margin: 0,
+      fontSize: 14,
+      fontWeight: 700,
+      color: 'var(--text-primary, #111827)',
+    },
+    text: {
+      margin: '6px 0 0 0',
+      fontSize: 12,
+      color: 'var(--text-secondary, #6b7280)',
+      lineHeight: 1.45,
+    },
+    codeRow: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 8,
+      flexWrap: 'wrap',
+    },
+    code: {
+      padding: '6px 8px',
+      borderRadius: 8,
+      border: '1px solid var(--border-color, #e5e7eb)',
+      background: '#0b122015',
+      color: 'var(--text, #111827)',
+      fontFamily:
+        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontSize: 12,
+      userSelect: 'all',
+    },
+    copyBtn: {
+      padding: '6px 10px',
+      fontSize: 12,
+      fontWeight: 600,
+      border: 'none',
+      borderRadius: 8,
+      color: 'var(--button-text, #ffffff)',
+      backgroundColor: 'var(--button-bg, #2563EB)',
+      cursor: 'pointer',
+      boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(0,0,0,0.06))',
+      transition: 'opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease',
+    },
+    small: {
+      fontSize: 11,
+      color: 'var(--text-secondary, #6b7280)',
+      marginTop: 6,
+    },
+    link: {
+      color: 'var(--primary, #2563EB)',
+      textDecoration: 'none',
+    },
+  };
+
+  const example = 'ws://localhost:8080/ws';
+  const derived = env?.wsUrl || 'ws(s)://<your-host>/ws';
+  const backend = env?.apiBase || '';
+  const frontend = env?.frontendUrl || '';
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(example);
+    } catch {
+      // ignore copy failures
+    }
+  };
+
+  return (
+    <div style={styles.wrap} role="note" aria-live="polite" aria-label="WebSocket configuration help">
+      <span style={styles.bullet} aria-hidden="true" />
+      <div style={styles.content}>
+        <h3 style={styles.title}>WebSocket not connected</h3>
+        <p style={styles.text}>
+          Set REACT_APP_WS_URL to your WebSocket endpoint, or we will derive a fallback:
+          if REACT_APP_API_BASE or REACT_APP_BACKEND_URL is set, we swap http ↔ ws and reuse the path
+          (defaulting to /ws). Otherwise, we use the current page host with ws/wss and /ws.
+        </p>
+
+        <div style={styles.codeRow}>
+          <code style={styles.code}>REACT_APP_WS_URL={derived}</code>
+          <button type="button" style={styles.copyBtn} onClick={copy} title="Copy example">
+            Copy example
+          </button>
+        </div>
+
+        <div style={styles.small}>
+          Example: <code style={styles.code}>{example}</code>
+        </div>
+        <div style={styles.small}>
+          Fallback sources: REACT_APP_API_BASE={backend || '(unset)'}, REACT_APP_BACKEND_URL={(env?.featureFlags, '') || '(unset)'}; Page: {frontend || '(unknown)'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // PUBLIC_INTERFACE
 function App() {
   /** Root application component composing header, message list, and input with WebSocket integration. */
@@ -55,7 +180,7 @@ function App() {
   }, []);
 
   // Setup WebSocket
-  const { status, connected, connecting, send, lastMessage } = useWebSocket({
+  const { status, connected, connecting, send, lastMessage, url } = useWebSocket({
     // url resolved inside hook via env utils
     autoConnect: true,
     shouldReconnect: true,
@@ -251,6 +376,9 @@ function App() {
     },
   };
 
+  const envSummary = getEnvSummary();
+  const showWsBanner = !connected && !connecting; // show when disconnected (non-intrusive)
+
   return (
     <div className="App" style={styles.app}>
       <div style={styles.body}>
@@ -263,6 +391,8 @@ function App() {
           showAvatar
           avatarText="AI"
         />
+
+        <WsHelpBanner visible={showWsBanner} env={{ ...envSummary, wsResolved: (url || '') }} />
 
         <div style={styles.listWrap}>
           <MessageList messages={messages} currentUserId={currentUser.id} />
