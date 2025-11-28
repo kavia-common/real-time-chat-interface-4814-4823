@@ -13,16 +13,37 @@ import { getEnvSummary } from './utils/env';
 
 const DEFAULT_TITLE = 'Support Chat';
 
-// A small inline banner to guide users when WebSocket is not connected/unresolved.
+/**
+ * A non-intrusive, dismissible banner that shows WebSocket setup guidance.
+ * Uses Ocean Professional CSS variables for consistent theming.
+ */
 function WsHelpBanner({ visible, env }) {
-  if (!visible) return null;
+  // Hook must be called unconditionally at top-level to satisfy react-hooks rules
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem("ws-help-dismissed") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  if (!visible || dismissed) return null;
+
+  const onDismiss = () => {
+    setDismissed(true);
+    try {
+      sessionStorage.setItem("ws-help-dismissed", "1");
+    } catch {
+      // ignore storage issues
+    }
+  };
 
   const styles = {
     wrap: {
       display: 'flex',
       alignItems: 'flex-start',
       gap: 12,
-      margin: 12,
+      margin: '10px 12px 0 12px',
       padding: '12px 14px',
       background: 'var(--surface-muted, #f3f4f6)',
       border: '1px solid var(--border-color, #e5e7eb)',
@@ -43,11 +64,30 @@ function WsHelpBanner({ visible, env }) {
       flex: 1,
       minWidth: 0,
     },
+    titleRow: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8,
+    },
     title: {
       margin: 0,
       fontSize: 14,
       fontWeight: 700,
       color: 'var(--text-primary, #111827)',
+    },
+    dismissBtn: {
+      marginLeft: 'auto',
+      padding: '6px 10px',
+      fontSize: 12,
+      fontWeight: 600,
+      border: 'none',
+      borderRadius: 8,
+      color: 'var(--button-text, #ffffff)',
+      backgroundColor: 'var(--button-bg, #2563EB)',
+      cursor: 'pointer',
+      boxShadow: 'var(--shadow-xs, 0 1px 2px rgba(0,0,0,0.06))',
+      transition: 'opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease',
     },
     text: {
       margin: '6px 0 0 0',
@@ -66,7 +106,7 @@ function WsHelpBanner({ visible, env }) {
       padding: '6px 8px',
       borderRadius: 8,
       border: '1px solid var(--border-color, #e5e7eb)',
-      background: '#0b122015',
+      background: 'rgba(11,18,32,0.05)',
       color: 'var(--text, #111827)',
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
@@ -90,15 +130,12 @@ function WsHelpBanner({ visible, env }) {
       color: 'var(--text-secondary, #6b7280)',
       marginTop: 6,
     },
-    link: {
-      color: 'var(--primary, #2563EB)',
-      textDecoration: 'none',
-    },
   };
 
   const example = 'ws://localhost:8080/ws';
-  const derived = env?.wsUrl || 'ws(s)://<your-host>/ws';
-  const backend = env?.apiBase || '';
+  const derivedCurrent = env?.wsUrl || 'ws(s)://<your-host>/ws';
+  const apiBaseEnv = env?.apiBaseEnv || '(unset)';
+  const backendEnv = env?.backendUrlEnv || '(unset)';
   const frontend = env?.frontendUrl || '';
 
   const copy = async () => {
@@ -109,20 +146,29 @@ function WsHelpBanner({ visible, env }) {
     }
   };
 
+  const sourceHint = env?.wsFromExplicit
+    ? 'Using REACT_APP_WS_URL as configured.'
+    : 'Using derived fallback because REACT_APP_WS_URL is not set.';
+
   return (
     <div style={styles.wrap} role="note" aria-live="polite" aria-label="WebSocket configuration help">
       <span style={styles.bullet} aria-hidden="true" />
       <div style={styles.content}>
-        <h3 style={styles.title}>WebSocket not connected</h3>
+        <div style={styles.titleRow}>
+          <h3 style={styles.title}>WebSocket not connected</h3>
+          <button type="button" style={styles.dismissBtn} onClick={onDismiss} title="Dismiss for this session" aria-label="Dismiss WebSocket help for this session">
+            Dismiss
+          </button>
+        </div>
         <p style={styles.text}>
-          Set REACT_APP_WS_URL to your WebSocket endpoint, or we will derive a fallback:
-          if REACT_APP_API_BASE or REACT_APP_BACKEND_URL is set, we swap http ↔ ws and reuse the path
-          (defaulting to /ws). Otherwise, we use the current page host with ws/wss and /ws.
+          Set REACT_APP_WS_URL to your WebSocket endpoint. If not set, we derive a fallback:
+          when REACT_APP_API_BASE or REACT_APP_BACKEND_URL is provided, we convert http↔ws and reuse its path (defaulting to /ws).
+          Otherwise, we use the current page host with ws/wss and /ws.
         </p>
 
         <div style={styles.codeRow}>
-          <code style={styles.code}>REACT_APP_WS_URL={derived}</code>
-          <button type="button" style={styles.copyBtn} onClick={copy} title="Copy example">
+          <code style={styles.code}>REACT_APP_WS_URL={derivedCurrent}</code>
+          <button type="button" style={styles.copyBtn} onClick={copy} title="Copy example WebSocket URL">
             Copy example
           </button>
         </div>
@@ -131,7 +177,7 @@ function WsHelpBanner({ visible, env }) {
           Example: <code style={styles.code}>{example}</code>
         </div>
         <div style={styles.small}>
-          Fallback sources: REACT_APP_API_BASE={backend || '(unset)'}, REACT_APP_BACKEND_URL={(env?.featureFlags, '') || '(unset)'}; Page: {frontend || '(unknown)'}
+          {sourceHint} Fallback sources • REACT_APP_API_BASE={apiBaseEnv}, REACT_APP_BACKEND_URL={backendEnv}; Page: {frontend || '(unknown)'}
         </div>
       </div>
     </div>
@@ -369,6 +415,7 @@ function App() {
       borderLeft: '1px solid var(--border-color, #e5e7eb)',
       borderRight: '1px solid var(--border-color, #e5e7eb)',
       background: 'var(--surface, #ffffff)',
+      paddingBottom: 4, // tiny breathing room so banner never feels cramped near input
     },
     listWrap: {
       flex: 1,
@@ -377,7 +424,8 @@ function App() {
   };
 
   const envSummary = getEnvSummary();
-  const showWsBanner = !connected && !connecting; // show when disconnected (non-intrusive)
+  // Show when disconnected, or when URL is derived (not from explicit env) to guide configuration.
+  const showWsBanner = (!connected && !connecting) || !envSummary.wsFromExplicit;
 
   return (
     <div className="App" style={styles.app}>

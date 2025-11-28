@@ -119,12 +119,14 @@ function getFrontendUrl() {
  * 4) Otherwise, use window.location with ws/wss and optional '/ws' path
  * In all cases, returns an absolute ws:// or wss:// URL.
  */
-// PUBLIC_INTERFACE
-export function getWsUrl() {
-  /** This helper returns the WebSocket endpoint absolute URL. */
+/**
+ * Returns the resolved WebSocket URL and whether it came from an explicit env var.
+ * @returns {{ url: string, fromExplicit: boolean }}
+ */
+function getWsResolution() {
   const explicit = readEnv("REACT_APP_WS_URL");
   if (explicit) {
-    return explicit;
+    return { url: explicit, fromExplicit: true };
   }
 
   const apiBase = readEnv("REACT_APP_API_BASE");
@@ -135,21 +137,25 @@ export function getWsUrl() {
     try {
       const u = new URL(candidate);
       const scheme = u.protocol === "http:" ? "ws:" : "wss:";
-      // Preserve any path on API base; if none, default to /ws for common backends
       const path = u.pathname && u.pathname !== "/" ? u.pathname : "/ws";
       const wsUrl = `${scheme}//${u.host}${path}`;
-      return wsUrl;
+      return { url: wsUrl, fromExplicit: false };
     } catch {
-      // If URL parsing fails, fall back to window-based computation
+      // continue to window-based fallback
     }
   }
 
   // Derive from current page location
   const host = getPageHost() || "localhost:3000";
   const scheme = getWsScheme();
-  // Default common websocket path
   const path = "/ws";
-  return `${scheme}://${host}${path}`;
+  return { url: `${scheme}://${host}${path}`, fromExplicit: false };
+}
+
+// PUBLIC_INTERFACE
+export function getWsUrl() {
+  /** This helper returns the WebSocket endpoint absolute URL. */
+  return getWsResolution().url;
 }
 
 /**
@@ -165,12 +171,31 @@ export function isProduction() {
 /**
  * Returns structured environment information useful across the app.
  */
+/**
+ * Indicates whether the WS URL came from REACT_APP_WS_URL or a derived fallback.
+ */
+function getWsResolutionMeta() {
+  const { url, fromExplicit } = getWsResolution();
+  return {
+    url,
+    fromExplicit,
+    explicitEnv: readEnv("REACT_APP_WS_URL") || "",
+    apiBaseEnv: readEnv("REACT_APP_API_BASE") || "",
+    backendUrlEnv: readEnv("REACT_APP_BACKEND_URL") || "",
+  };
+}
+
 // PUBLIC_INTERFACE
 export function getEnvSummary() {
   /** Provides a small snapshot of resolved environment values for debugging. */
+  const ws = getWsResolutionMeta();
   return {
     apiBase: getApiBase(),
-    wsUrl: getWsUrl(),
+    wsUrl: ws.url,
+    wsFromExplicit: ws.fromExplicit,
+    wsExplicitEnv: ws.explicitEnv,
+    apiBaseEnv: ws.apiBaseEnv,
+    backendUrlEnv: ws.backendUrlEnv,
     frontendUrl: getFrontendUrl(),
     nodeEnv: readEnv("REACT_APP_NODE_ENV") || "development",
     logLevel: readEnv("REACT_APP_LOG_LEVEL") || "info",
